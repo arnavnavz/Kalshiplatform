@@ -3,12 +3,16 @@ Configuration management for the Sharp Mismatch Sports Bot.
 Loads settings from environment variables with sensible defaults.
 """
 import os
+import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
-load_dotenv()
+# Try .env.local first (for secrets), then .env (for defaults)
+load_dotenv(".env.local")  # Load local overrides first
+load_dotenv()  # Then load .env (will not override .env.local values)
 
 
 @dataclass
@@ -43,9 +47,36 @@ class Config:
     @classmethod
     def from_env(cls) -> "Config":
         """Load configuration from environment variables."""
+        # Support both KALSHI_API_KEY/KALSHI_API_SECRET and KALSHI_API_KEY_ID/KALSHI_PRIVATE_KEY
+        api_key = os.getenv("KALSHI_API_KEY") or os.getenv("KALSHI_API_KEY_ID", "")
+        api_secret = os.getenv("KALSHI_API_SECRET") or os.getenv("KALSHI_PRIVATE_KEY", "")
+        
+        # If secret is empty or too short, try reading from .env file directly (for multi-line keys)
+        if not api_secret or len(api_secret) < 100:
+            try:
+                env_path = Path(".env")
+                if env_path.exists():
+                    with open(env_path, 'r') as f:
+                        content = f.read()
+                        # Extract multi-line secret - capture until next variable or end of file
+                        # Look for KALSHI_API_SECRET= and capture everything until next variable or EOF
+                        pattern = r'KALSHI_API_SECRET=(.*?)(?=\n[A-Z][A-Z_]*=|$)'
+                        match = re.search(pattern, content, re.DOTALL)
+                        if match:
+                            api_secret = match.group(1).strip()
+                            # Remove quotes if present
+                            if api_secret.startswith('"') and api_secret.endswith('"'):
+                                api_secret = api_secret[1:-1]
+                            elif api_secret.startswith("'") and api_secret.endswith("'"):
+                                api_secret = api_secret[1:-1]
+                            # Clean up any extra whitespace/newlines
+                            api_secret = api_secret.strip()
+            except Exception:
+                pass
+        
         return cls(
-            kalshi_api_key=os.getenv("KALSHI_API_KEY", ""),
-            kalshi_api_secret=os.getenv("KALSHI_API_SECRET", ""),
+            kalshi_api_key=api_key,
+            kalshi_api_secret=api_secret,
             kalshi_base_url=os.getenv(
                 "KALSHI_BASE_URL", 
                 "https://api.demo.kalshi.com/trade-api/v2"

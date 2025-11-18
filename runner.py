@@ -78,12 +78,31 @@ def market_is_eligible(market: Market, config) -> bool:
         )
         return False
     
-    # Check time to start
-    time_to_start = (market.start_time - datetime.now()).total_seconds() / 60
-    if time_to_start < config.min_time_to_start_minutes:
+    # Check time to start - must be in the future
+    # Handle timezone-aware vs naive datetime comparison
+    from pytz import utc
+    now = datetime.now(utc) if market.start_time.tzinfo else datetime.now()
+    if market.start_time.tzinfo and not now.tzinfo:
+        now = utc.localize(now)
+    elif not market.start_time.tzinfo and now.tzinfo:
+        market_start = utc.localize(market.start_time)
+        time_to_start_minutes = (market_start - now).total_seconds() / 60
+    else:
+        time_to_start_minutes = (market.start_time - now).total_seconds() / 60
+    
+    # Filter out past games
+    if time_to_start_minutes < 0:
         logger.debug(
             f"Market {market.market_id} filtered: "
-            f"too close to start ({time_to_start:.1f} min < {config.min_time_to_start_minutes} min)"
+            f"game is in the past ({time_to_start_minutes:.1f} minutes ago)"
+        )
+        return False
+    
+    # Check minimum time to start
+    if time_to_start_minutes < config.min_time_to_start_minutes:
+        logger.debug(
+            f"Market {market.market_id} filtered: "
+            f"too close to start ({time_to_start_minutes:.1f} min < {config.min_time_to_start_minutes} min)"
         )
         return False
     
@@ -210,9 +229,31 @@ def main():
                     # Map market to game and team
                     game_id, team, team_a, team_b = map_market_to_game_and_team(market)
                     
+                    # Determine opponent
+                    if team == team_a:
+                        opponent = team_b
+                    elif team == team_b:
+                        opponent = team_a
+                    else:
+                        # Fallback: parse from event_name
+                        if " vs " in market.event_name:
+                            parts = market.event_name.replace(" Winner?", "").split(" vs ")
+                            if team in parts[0] or team[:3].lower() in parts[0].lower():
+                                opponent = parts[1].strip() if len(parts) > 1 else "Unknown"
+                            else:
+                                opponent = parts[0].strip()
+                        else:
+                            opponent = "Unknown"
+                    
                     # Get fair probability
                     if game_id not in fair_probs:
                         logger.debug(f"No fair probabilities for game_id: {game_id}")
+                        continue
+                    
+                    # Check if we're using real odds (not mock)
+                    ref_odds_obj = ref_odds.get(game_id)
+                    if ref_odds_obj and ref_odds_obj.source == "mock":
+                        logger.debug(f"Skipping {market.team} vs {opponent} - using mock odds, waiting for real odds")
                         continue
                     
                     fair_prob = get_fair_prob_for_team(
@@ -230,8 +271,13 @@ def main():
                         )
                         continue
                     
+                    # Calculate time until game
+                    time_until_game = (market.start_time - datetime.now()).total_seconds() / 3600
+                    time_str = f"{time_until_game:.1f}h" if time_until_game > 1 else f"{time_until_game*60:.0f}m"
+                    
                     logger.info(
-                        f"Found edge opportunity: {market.team} | "
+                        f"Found edge opportunity: {market.team} vs {opponent} ({market.league}) | "
+                        f"Game in {time_str} | "
                         f"fair={fair_prob:.4f}, kalshi={kalshi_prob:.4f}, "
                         f"edge={edge:.4f}"
                     )
@@ -263,7 +309,9 @@ def main():
                         edge=edge,
                         config=config,
                         kalshi_client=kalshi,
-                        mode=config.mode
+                        mode=config.mode,
+                        opponent=opponent,
+                        game_time=market.start_time
                     )
                     
                     if trade:

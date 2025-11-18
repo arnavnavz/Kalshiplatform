@@ -246,11 +246,45 @@ def main():
         # Convert to DataFrame for display
         trades_df_data = []
         for trade in trades[-50:]:  # Last 50 trades
+            # Format game matchup
+            team = trade.get('team', 'Unknown')
+            opponent = trade.get('opponent', 'Unknown')
+            matchup = f"{team} vs {opponent}" if opponent != 'Unknown' else team
+            
+            # Format game time - prefer game_time_et if available
+            game_time_et = trade.get('game_time_et', '')
+            game_time = trade.get('game_time', '')
+            time_until = trade.get('time_until_game', '')
+            
+            # Use ET time if available, otherwise fall back to regular game_time
+            if game_time_et:
+                game_info = game_time_et
+            elif game_time and time_until:
+                game_info = f"{game_time} ({time_until})"
+            elif time_until:
+                game_info = f"In {time_until}"
+            elif game_time:
+                game_info = game_time
+            else:
+                game_info = 'N/A'
+            
+            # Get conviction and reasoning
+            conviction = trade.get('conviction', 'N/A')
+            reasoning = trade.get('reasoning', 'N/A')
+            
+            # Get game time in ET
+            game_time_et = trade.get('game_time_et', trade.get('game_time', 'N/A'))
+            
             trades_df_data.append({
                 'Timestamp': trade.get('timestamp', ''),
-                'Market ID': trade.get('market_id', '')[:20] + '...' if len(trade.get('market_id', '')) > 20 else trade.get('market_id', ''),
-                'Team': trade.get('team', ''),
+                'Matchup': matchup,
+                'Team Betting': team,  # Which team we're choosing
+                'Opponent': opponent if opponent != 'Unknown' else 'N/A',
                 'League': trade.get('league', ''),
+                'Game Time (ET)': game_time_et,
+                'Time Until': time_until if time_until else 'N/A',
+                'Conviction': conviction,
+                'Reasoning': reasoning[:80] + '...' if len(reasoning) > 80 else reasoning,
                 'Fair Prob': f"{trade.get('fair_prob', 0):.2%}" if 'fair_prob' in trade else 'N/A',
                 'Kalshi Prob': f"{trade.get('kalshi_prob', 0):.2%}" if 'kalshi_prob' in trade else 'N/A',
                 'Edge': f"{trade.get('edge', 0):.2%}" if 'edge' in trade else 'N/A',

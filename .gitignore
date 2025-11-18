@@ -41,3 +41,6 @@ logs/
 .DS_Store
 Thumbs.db
 
+.gitignore
+.env.local
+.env.backup*

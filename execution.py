@@ -48,7 +48,9 @@ def execute_trade(
     edge: float,
     config: Config,
     kalshi_client: KalshiClient,
-    mode: str
+    mode: str,
+    opponent: str = None,
+    game_time: datetime = None
 ) -> Optional[Trade]:
     """
     Execute a trade (SHADOW or LIVE mode).
@@ -97,16 +99,87 @@ def execute_trade(
             order_id=None
         )
         
-        # Log detailed trade information
+        # Extract opponent and game time if not provided
+        if opponent is None:
+            # Parse from event_name (e.g., "Sacramento vs Memphis Winner?")
+            if " vs " in market.event_name:
+                parts = market.event_name.replace(" Winner?", "").split(" vs ")
+                if market.team in parts[0]:
+                    opponent = parts[1].strip() if len(parts) > 1 else "Unknown"
+                elif market.team in parts[1]:
+                    opponent = parts[0].strip()
+                else:
+                    # Try to match by abbreviation or use the other team
+                    opponent = parts[1].strip() if len(parts) > 1 else "Unknown"
+            else:
+                opponent = "Unknown"
+        
+        if game_time is None:
+            game_time = market.start_time
+        
+        # Format game time in Eastern timezone
+        from pytz import timezone
+        import pytz
+        
+        if game_time:
+            # Convert to Eastern time
+            if game_time.tzinfo is None:
+                # Assume UTC if no timezone info
+                game_time = pytz.utc.localize(game_time)
+            
+            eastern = timezone('US/Eastern')
+            game_time_et = game_time.astimezone(eastern)
+            game_time_str = game_time_et.strftime("%Y-%m-%d %I:%M %p ET")
+            
+            # Calculate time until game
+            now_utc = datetime.now(pytz.utc) if game_time.tzinfo else datetime.now()
+            if game_time.tzinfo:
+                time_diff = (game_time - now_utc).total_seconds() / 3600  # hours
+            else:
+                time_diff = (game_time - datetime.now()).total_seconds() / 3600
+            
+            if time_diff > 24:
+                time_until_game = f"{time_diff/24:.1f} days"
+            elif time_diff > 1:
+                time_until_game = f"{time_diff:.1f} hours"
+            elif time_diff > 0:
+                time_until_game = f"{time_diff*60:.0f} minutes"
+            else:
+                time_until_game = "Game started"
+        else:
+            game_time_str = "Unknown"
+            time_until_game = "Unknown"
+        
+        # Generate reasoning for the trade
+        edge_pct = edge * 100
+        kalshi_pct = kalshi_price * 100
+        fair_pct = fair_prob * 100
+        
+        if edge > 0.20:
+            conviction = "HIGH"
+            reasoning = f"Strong edge: Kalshi prices {market.team} at {kalshi_pct:.1f}% but fair value is {fair_pct:.1f}% (edge: {edge_pct:.1f}%)"
+        elif edge > 0.10:
+            conviction = "MEDIUM"
+            reasoning = f"Good edge: Kalshi prices {market.team} at {kalshi_pct:.1f}% vs fair value {fair_pct:.1f}% (edge: {edge_pct:.1f}%)"
+        else:
+            conviction = "LOW"
+            reasoning = f"Moderate edge: Kalshi prices {market.team} at {kalshi_pct:.1f}% vs fair value {fair_pct:.1f}% (edge: {edge_pct:.1f}%)"
+        
+        # Log detailed trade information with game details
         shadow_logger.info(
             f"SHADOW TRADE | "
             f"market_id={market.market_id} | "
             f"game_id={market.game_id} | "
             f"team={market.team} | "
+            f"opponent={opponent} | "
             f"league={market.league} | "
+            f"game_time_et={game_time_str} | "
+            f"time_until_game={time_until_game} | "
             f"fair_prob={fair_prob:.4f} | "
             f"kalshi_prob={kalshi_price:.4f} | "
             f"edge={edge:.4f} | "
+            f"conviction={conviction} | "
+            f"reasoning={reasoning} | "
             f"stake=${stake:.2f} | "
             f"quantity={quantity} | "
             f"limit_price={max_price:.4f}"
@@ -114,7 +187,8 @@ def execute_trade(
         
         logger.info(
             f"SHADOW: Would buy {quantity} YES @ {max_price:.4f} "
-            f"for ${stake:.2f} on {market.team} (edge={edge:.4f})"
+            f"for ${stake:.2f} on {market.team} vs {opponent} "
+            f"({market.league}, {time_until_game} until game) (edge={edge:.4f})"
         )
         
         return trade
