@@ -131,6 +131,28 @@ Or set `MODE=LIVE` in your `.env` file.
 - Sufficient account balance
 - API access enabled on your Kalshi account
 
+### Web Dashboard
+
+The project includes a Streamlit web dashboard for monitoring bot activity, viewing trades, and tracking performance.
+
+**To launch the dashboard:**
+
+```bash
+streamlit run dashboard.py
+```
+
+The dashboard will open in your browser at `http://localhost:8501`
+
+**Dashboard Features:**
+- 📈 **Trading Metrics**: Total trades, stake, average edge, and more
+- 📊 **Edge Distribution**: Visual chart of trade edges
+- 📋 **Recent Trades Table**: Detailed view of all shadow/live trades
+- ⚙️ **Configuration Display**: View current bot settings and risk limits
+- 📝 **Bot Activity Log**: Recent bot log entries
+- 📥 **CSV Export**: Download trade history as CSV
+
+**Note:** The dashboard reads from log files, so make sure the bot has been run at least once to generate logs. The dashboard updates automatically when you refresh the page.
+
 ## Configuration
 
 ### Strategy Parameters
@@ -168,6 +190,7 @@ Or set `MODE=LIVE` in your `.env` file.
 ├── risk_engine.py         # Risk management
 ├── execution.py           # Trade execution (SHADOW/LIVE)
 ├── runner.py              # Main event loop
+├── dashboard.py           # Streamlit web dashboard
 ├── requirements.txt       # Python dependencies
 ├── .env.example           # Environment variable template
 ├── README.md              # This file
