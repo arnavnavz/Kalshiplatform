@@ -11,6 +11,7 @@ from typing import Optional
 from config import Config
 from models import Market, Trade
 from kalshi_client import KalshiClient
+from research import GameResearch
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +51,8 @@ def execute_trade(
     kalshi_client: KalshiClient,
     mode: str,
     opponent: str = None,
-    game_time: datetime = None
+    game_time: datetime = None,
+    research: GameResearch = None
 ) -> Optional[Trade]:
     """
     Execute a trade (SHADOW or LIVE mode).
@@ -155,15 +157,32 @@ def execute_trade(
         kalshi_pct = kalshi_price * 100
         fair_pct = fair_prob * 100
         
+        # Base reasoning from edge
         if edge > 0.20:
             conviction = "HIGH"
-            reasoning = f"Strong edge: Kalshi prices {market.team} at {kalshi_pct:.1f}% but fair value is {fair_pct:.1f}% (edge: {edge_pct:.1f}%)"
+            base_reasoning = f"Strong edge: Kalshi prices {market.team} at {kalshi_pct:.1f}% but fair value is {fair_pct:.1f}% (edge: {edge_pct:.1f}%)"
         elif edge > 0.10:
             conviction = "MEDIUM"
-            reasoning = f"Good edge: Kalshi prices {market.team} at {kalshi_pct:.1f}% vs fair value {fair_pct:.1f}% (edge: {edge_pct:.1f}%)"
+            base_reasoning = f"Good edge: Kalshi prices {market.team} at {kalshi_pct:.1f}% vs fair value {fair_pct:.1f}% (edge: {edge_pct:.1f}%)"
         else:
             conviction = "LOW"
-            reasoning = f"Moderate edge: Kalshi prices {market.team} at {kalshi_pct:.1f}% vs fair value {fair_pct:.1f}% (edge: {edge_pct:.1f}%)"
+            base_reasoning = f"Moderate edge: Kalshi prices {market.team} at {kalshi_pct:.1f}% vs fair value {fair_pct:.1f}% (edge: {edge_pct:.1f}%)"
+        
+        # Add research-based reasoning if available
+        if research and research.reasoning:
+            reasoning = f"{base_reasoning}. Research: {research.reasoning}"
+        else:
+            reasoning = base_reasoning
+        
+        # Ensure opponent and game_time are set (should never be None at this point)
+        if opponent is None:
+            opponent = "Unknown"
+            logger.warning(f"Opponent was None for market {market.market_id}, using Unknown")
+        
+        if game_time_str is None or game_time_str == "Unknown":
+            logger.warning(f"Game time was None/Unknown for market {market.market_id}")
+            game_time_str = "Unknown"
+            time_until_game = "Unknown"
         
         # Log detailed trade information with game details
         shadow_logger.info(

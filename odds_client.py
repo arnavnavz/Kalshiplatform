@@ -44,6 +44,26 @@ class OddsClient:
         # Remove common suffixes and normalize
         name = name.lower().strip()
         
+        # Handle truncated names (e.g., "Los Angeles L" -> "Los Angeles Lakers")
+        # Map common abbreviations to full team names
+        abbreviation_map = {
+            "los angeles l": "los angeles lakers",
+            "la l": "los angeles lakers",
+            "la clippers": "los angeles clippers",
+            "la c": "los angeles clippers",
+            "new york k": "new york knicks",
+            "ny k": "new york knicks",
+            "golden state": "golden state warriors",
+            "philadelphia": "philadelphia 76ers",
+            "philly": "philadelphia 76ers",
+        }
+        
+        # Check if name matches an abbreviation
+        for abbrev, full_name in abbreviation_map.items():
+            if name == abbrev or name.startswith(abbrev):
+                name = full_name
+                break
+        
         # Remove common team suffixes
         suffixes = [
             " warriors", " lakers", " clippers", " celtics", " nets", " knicks",
@@ -57,21 +77,12 @@ class OddsClient:
             if name.endswith(suffix):
                 name = name[:-len(suffix)].strip()
         
-        # Remove city prefixes for some teams
-        name = name.replace("los angeles ", "").replace("la ", "")
-        name = name.replace("new york ", "").replace("ny ", "")
-        name = name.replace("golden state", "warriors")
-        name = name.replace("philadelphia", "philly")
+        # Remove city prefixes for some teams (but keep if it's part of team identity)
+        if not name.startswith("los angeles") and not name.startswith("new york"):
+            name = name.replace("los angeles ", "").replace("la ", "")
+            name = name.replace("new york ", "").replace("ny ", "")
         
-        # Special cases for common team name variations
-        if name == "lakers":
-            name = "lakers"  # Keep as is, will match via contains check
-        elif name == "clippers":
-            name = "clippers"
-        elif name == "knicks":
-            name = "knicks"
-        elif name == "nets":
-            name = "nets"
+        name = name.replace("golden state", "warriors")
         
         return name
     
@@ -88,14 +99,19 @@ class OddsClient:
         if kalshi_norm in odds_norm or odds_norm in kalshi_norm:
             return True
         
+        # Handle truncated names - check if kalshi name is a prefix of odds name
+        # e.g., "los angeles l" should match "los angeles lakers"
+        if kalshi_norm and odds_norm.startswith(kalshi_norm):
+            return True
+        if odds_norm and kalshi_norm.startswith(odds_norm):
+            return True
+        
         # Check first 3-4 characters match (for abbreviations)
         if len(kalshi_norm) >= 3 and len(odds_norm) >= 3:
             if kalshi_norm[:3] == odds_norm[:3]:
                 return True
         
         # Special case: check if normalized names share significant words
-        # e.g., "memphis" should match "memphis grizzlies" (already handled by contains)
-        # But also handle cases like "lakers" matching "los angeles lakers"
         kalshi_words = set(kalshi_norm.split())
         odds_words = set(odds_norm.split())
         if kalshi_words and odds_words:
@@ -103,6 +119,17 @@ class OddsClient:
             common_words = kalshi_words.intersection(odds_words)
             if common_words and any(len(w) > 3 for w in common_words):
                 return True
+        
+        # Handle single letter matches (e.g., "l" should match "lakers" if context suggests it)
+        # This is a fallback for very truncated names
+        if len(kalshi_norm) == 1 and len(odds_norm) > 3:
+            # Check if the single letter matches the first letter of a known team
+            if odds_norm.startswith(kalshi_norm):
+                # Additional check: is this a known team abbreviation?
+                known_teams = ["lakers", "clippers", "knicks", "nets", "celtics"]
+                for team in known_teams:
+                    if team.startswith(kalshi_norm) and team in odds_norm:
+                        return True
         
         return False
     
@@ -121,6 +148,14 @@ class OddsClient:
             }
             
             response = requests.get(url, params=params, timeout=10)
+            
+            # Check for authentication errors
+            if response.status_code == 401:
+                logger.error("The Odds API returned 401 Unauthorized. Your API key may be invalid or expired.")
+                logger.error("Please check your THE_ODDS_API_KEY in .env.local")
+                logger.error("Get a new key from: https://the-odds-api.com/")
+                return []
+            
             response.raise_for_status()
             
             # Check API usage
@@ -128,29 +163,58 @@ class OddsClient:
             used = response.headers.get("x-requests-used")
             logger.debug(f"Odds API usage: {used} used, {remaining} remaining")
             
+            if remaining and int(remaining) == 0:
+                logger.warning("The Odds API quota exhausted. Consider upgrading your plan.")
+            
             return response.json()
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 401:
+                logger.error("The Odds API authentication failed. Check your API key.")
+            else:
+                logger.error(f"Error fetching odds from The Odds API: {e}")
+            return []
         except requests.exceptions.RequestException as e:
             logger.error(f"Error fetching odds from The Odds API: {e}")
             return []
     
     def _find_matching_game(self, game: Game, odds_data: List[Dict]) -> Optional[Dict]:
         """Find matching game in odds data."""
+        from datetime import datetime, timedelta
+        from pytz import utc
+        
+        best_match = None
+        best_score = 0
+        
         for event in odds_data:
             home_team = event.get("home_team", "")
             away_team = event.get("away_team", "")
             
             # Try to match teams
-            team_a_matches = (
-                self._match_teams(game.team_a, home_team) or
-                self._match_teams(game.team_a, away_team)
-            )
-            team_b_matches = (
-                self._match_teams(game.team_b, home_team) or
-                self._match_teams(game.team_b, away_team)
-            )
+            team_a_matches_home = self._match_teams(game.team_a, home_team)
+            team_a_matches_away = self._match_teams(game.team_a, away_team)
+            team_b_matches_home = self._match_teams(game.team_b, home_team)
+            team_b_matches_away = self._match_teams(game.team_b, away_team)
             
-            if team_a_matches and team_b_matches:
-                return event
+            # Calculate match score (both teams must match)
+            if (team_a_matches_home or team_a_matches_away) and (team_b_matches_home or team_b_matches_away):
+                # Both teams match - check date proximity
+                try:
+                    commence_str = event.get("commence_time", "")
+                    if commence_str:
+                        commence_time = datetime.fromisoformat(commence_str.replace('Z', '+00:00'))
+                        game_time = game.start_time
+                        
+                        # Make both timezone-aware for comparison
+                        if game_time.tzinfo is None:
+                            game_time = utc.localize(game_time)
+                        
+                        time_diff = abs((commence_time - game_time).total_seconds())
+                        # If within 3 days, it's a match (games might be scheduled slightly differently)
+                        if time_diff < 3 * 24 * 3600:
+                            return event
+                except Exception:
+                    # Date parsing failed, but teams match - use it anyway
+                    return event
         
         return None
     
@@ -290,12 +354,9 @@ class OddsClient:
             
             logger.info(f"Matched {matched_count}/{len(league_games)} {league} games with real odds")
         
-        # Fallback to mock for games without odds
+        # No mock data - only use real odds
         if len(ref_odds) < len(games):
-            logger.info(f"Found odds for {len(ref_odds)}/{len(games)} games. Using mock for rest.")
-            for game in games:
-                if game.game_id not in ref_odds:
-                    ref_odds[game.game_id] = self._generate_mock_odds(game)
+            logger.info(f"Found real odds for {len(ref_odds)}/{len(games)} games. Games without real odds will be skipped.")
         
         return ref_odds
     

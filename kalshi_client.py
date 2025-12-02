@@ -219,41 +219,9 @@ class KalshiClient:
         # Even in SHADOW mode, we can fetch real markets (just won't place orders)
         use_real_api = bool(self.api_key and self.api_secret and self._private_key)
         
-        if not use_real_api and self.config.mode == "SHADOW":
-            logger.debug("SHADOW mode: No API keys, returning mock markets")
-            from datetime import timedelta
-            import random
-            
-            # Generate some mock markets for testing
-            mock_markets = []
-            teams = [
-                ("Lakers", "Warriors", "NBA"),
-                ("Chiefs", "Bills", "NFL"),
-                ("Man City", "Liverpool", "EPL"),
-            ]
-            
-            for i, (team_a, team_b, league) in enumerate(teams):
-                game_id = f"{league}_{team_a}_{team_b}_{i}"
-                yes_price = 0.45 + random.uniform(-0.1, 0.1)
-                no_price = 1.0 - yes_price
-                spread = random.uniform(0.02, 0.10)
-                
-                mock_markets.append(Market(
-                    market_id=f"market_{i}",
-                    event_name=f"{team_a} vs {team_b}",
-                    game_id=game_id,
-                    league=league,
-                    team=team_a,
-                    best_yes_price=max(0.01, min(0.99, yes_price)),
-                    best_no_price=max(0.01, min(0.99, no_price)),
-                    volume=random.randint(1000, 10000),
-                    spread=spread,
-                    start_time=datetime.now() + timedelta(hours=2),
-                    settlement_time=datetime.now() + timedelta(hours=4),
-                    title=f"{team_a} to win vs {team_b}"
-                ))
-            
-            return mock_markets
+        if not use_real_api:
+            logger.error("No API keys available. Cannot fetch real markets. Please configure Kalshi API keys.")
+            return []  # Return empty list - no mock data
         
         try:
             # Fetch simple game markets by querying each sports series
@@ -291,6 +259,10 @@ class KalshiClient:
                 # Skip multivariate/combo markets
                 ticker = market_data.get("ticker", "")
                 if "KXMVENBASINGLEGAME" in ticker or "KXMVEMENTION" in ticker:
+                    continue
+                
+                # Skip TIE markets - we only want team winner markets
+                if "-TIE" in ticker or "TIE" in ticker.upper():
                     continue
                 
                 # Parse market data - adjust field names based on actual API response

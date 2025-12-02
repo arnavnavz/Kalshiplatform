@@ -78,37 +78,69 @@ def compute_fair_probs(
     return fair_probs
 
 
-def calc_edge(fair_prob: float, kalshi_price: float) -> float:
+def calc_edge(
+    fair_prob: float, 
+    kalshi_price: float, 
+    research_prob: float = None,
+    research_confidence: str = None
+) -> float:
     """
     Calculate edge (expected value) of a trade.
+    Uses research probability if available, with dynamic weighting based on confidence.
     
     Args:
         fair_prob: Fair probability from reference odds (0-1)
         kalshi_price: Kalshi market price (0-1)
+        research_prob: Research-based probability (0-1), optional
+        research_confidence: Research confidence level ("HIGH", "MEDIUM", "LOW"), optional
         
     Returns:
         Edge in probability units (positive = good trade)
     """
+    # If we have research probability, use weighted combination
+    # Weight depends on research confidence
+    if research_prob is not None and 0 < research_prob < 1:
+        # Dynamic weighting based on confidence
+        if research_confidence == "HIGH":
+            # High confidence: trust research more (85% research, 15% odds)
+            research_weight = 0.85
+        elif research_confidence == "MEDIUM":
+            # Medium confidence: balanced (70% research, 30% odds) - default
+            research_weight = 0.70
+        elif research_confidence == "LOW":
+            # Low confidence: trust odds more (50% research, 50% odds)
+            research_weight = 0.50
+        else:
+            # Default to medium if confidence not specified
+            research_weight = 0.70
+        
+        combined_prob = research_weight * research_prob + (1 - research_weight) * fair_prob
+        return combined_prob - kalshi_price
+    
+    # Fallback to odds-based probability
     return fair_prob - kalshi_price
 
 
 def kelly_fraction(
     fair_prob: float, 
     market_prob: float, 
-    kelly_factor: float
+    kelly_factor: float,
+    research_confidence: str = None
 ) -> float:
     """
-    Calculate fractional Kelly bet size.
+    Calculate fractional Kelly bet size with confidence-based adjustment.
     
     For a binary contract paying 1 if event happens:
     - If we buy at price p and true prob is q, expected value = q - p
     - Kelly formula: f = (q - p) / (1 - p)
     - We apply a fractional Kelly factor for safety
+    - Confidence level further adjusts the bet size
     
     Args:
         fair_prob: Fair probability (0-1)
         market_prob: Market price (0-1)
         kelly_factor: Fraction of full Kelly to use (0-1)
+        research_confidence: Research confidence level ("HIGH", "MEDIUM", "LOW"), optional
         
     Returns:
         Kelly fraction (0-1), representing fraction of bankroll to bet
@@ -120,7 +152,23 @@ def kelly_fraction(
     base = (fair_prob - market_prob) / (1.0 - market_prob)
     
     # Apply fractional Kelly factor
-    return max(0.0, base * kelly_factor)
+    base_kelly = base * kelly_factor
+    
+    # Adjust based on research confidence
+    if research_confidence == "HIGH":
+        # High confidence: use full calculated Kelly (no reduction)
+        confidence_multiplier = 1.0
+    elif research_confidence == "MEDIUM":
+        # Medium confidence: reduce by 10%
+        confidence_multiplier = 0.9
+    elif research_confidence == "LOW":
+        # Low confidence: reduce by 30% (be more conservative)
+        confidence_multiplier = 0.7
+    else:
+        # No research: reduce by 20% (be conservative)
+        confidence_multiplier = 0.8
+    
+    return max(0.0, base_kelly * confidence_multiplier)
 
 
 def get_fair_prob_for_team(
